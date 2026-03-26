@@ -1,0 +1,582 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.3, pytest-9.0.2, pluggy-1.6.0
+rootdir: D:\NSE_Data
+plugins: anyio-4.12.1, dash-4.0.0, cov-7.0.0
+collected 0 items / 1 error
+
+=================================== ERRORS ====================================
+______________ ERROR collecting tests/test_stock_pipeline_dag.py ______________
+
+    """
+    tests/test_stock_pipeline_dag.py
+    ==================================
+    Unit tests for backend/dags/stock_pipeline_dag.py ù Sprint 4.
+    
+    Tests verify:
+      1. The DAG object has the expected id / schedule.
+      2. Exactly 8 tasks exist.
+      3. Every expected task_id is present.
+      4. The dependency graph is correct (fan-out / fan-in wiring).
+      5. All tasks are PythonOperator instances.
+      6. DAG has catchup=False and max_active_runs=1.
+    
+    No live Airflow installation, database, or network connection is required.
+    Both Airflow and the pipeline helpers are fully mocked before the DAG module
+    is loaded.
+    
+    Run with:
+        pytest tests/test_stock_pipeline_dag.py -v
+    """
+    
+    from __future__ import annotations
+    
+    import importlib.util
+    import pathlib
+    import sys
+    import types
+    from datetime import datetime, timedelta
+    from unittest.mock import MagicMock, patch
+    
+    
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # Build a minimal in-process Airflow stub so the DAG module can be imported
+    # without installing apache-airflow.
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    
+    class _Task:
+        """Minimal task that tracks task_id + dependency lists."""
+        def __init__(self, task_id: str, python_callable=None, op_kwargs=None, dag=None, **kwargs):
+            self.task_id = task_id
+            self.python_callable = python_callable
+            self.op_kwargs = op_kwargs or {}
+            self._dag = dag
+            self.upstream_list: list[_Task] = []
+            self.downstream_list: list[_Task] = []
+            if dag is not None:
+                dag.task_dict[task_id] = self
+    
+        def set_upstream(self, other: "_Task | list[_Task]") -> None:
+            tasks = [other] if isinstance(other, _Task) else other
+            for t in tasks:
+                if t not in self.upstream_list:
+                    self.upstream_list.append(t)
+                if self not in t.downstream_list:
+                    t.downstream_list.append(self)
+    
+        def set_downstream(self, other: "_Task | list[_Task]") -> None:
+            tasks = [other] if isinstance(other, _Task) else other
+            for t in tasks:
+                t.set_upstream(self)
+    
+        def __rshift__(self, other):
+            """Support task >> other and task >> [a, b]."""
+            if isinstance(other, list):
+                for t in other:
+                    self.set_downstream(t)
+            else:
+                self.set_downstream(other)
+            return other
+    
+        def __lshift__(self, other):
+            """Support task << other."""
+            if isinstance(other, list):
+                for t in other:
+                    self.set_upstream(t)
+            else:
+                self.set_upstream(other)
+            return other
+    
+    
+    class _DAG:
+        """Minimal DAG that records tasks and exposes Airflow-like attributes."""
+        def __init__(self, dag_id: str, *, schedule_interval=None, default_args=None,
+                     catchup=True, max_active_runs=16, tags=None,
+                     is_paused_upon_creation=None, **kwargs):
+            self.dag_id = dag_id
+            self.schedule_interval = schedule_interval
+            self.default_args = default_args or {}
+            self.catchup = catchup
+            self.max_active_runs = max_active_runs
+            self.tags = tags or []
+            self.is_paused_upon_creation = is_paused_upon_creation
+            self.task_dict: dict[str, _Task] = {}
+    
+        @property
+        def tasks(self):
+            return list(self.task_dict.values())
+    
+        @property
+        def task_ids(self):
+            return list(self.task_dict.keys())
+    
+        def get_task(self, task_id: str) -> _Task:
+            if task_id not in self.task_dict:
+                raise KeyError(f"Task {task_id!r} not found in DAG")
+            return self.task_dict[task_id]
+    
+        def __enter__(self):
+            return self
+    
+        def __exit__(self, *args):
+            pass
+    
+    
+    # Install the Airflow stub modules \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    
+    def _make_mod(name: str) -> types.ModuleType:
+        m = types.ModuleType(name)
+        return m
+    
+    
+    _airflow = _make_mod("airflow")
+    _airflow.DAG = _DAG  # type: ignore[attr-defined]
+    sys.modules.setdefault("airflow", _airflow)
+    
+    _models = _make_mod("airflow.models")
+    _models.DAG = _DAG  # type: ignore[attr-defined]
+    sys.modules.setdefault("airflow.models", _models)
+    
+    _python_op = _make_mod("airflow.operators.python")
+    _python_op.PythonOperator = _Task  # type: ignore[attr-defined]
+    sys.modules.setdefault("airflow.operators.python", _python_op)
+    
+    _utils_dates = _make_mod("airflow.utils.dates")
+    _utils_dates.days_ago = lambda n: datetime.utcnow() - timedelta(days=n)  # type: ignore[attr-defined]
+    sys.modules.setdefault("airflow.utils.dates", _utils_dates)
+    
+    _utils = _make_mod("airflow.utils")
+    sys.modules.setdefault("airflow.utils", _utils)
+    
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # Stub the pipeline modules (only leaf modules ù backend/ stays a real package)
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    
+    def _pipeline_stub(**attrs) -> types.ModuleType:
+        m = types.ModuleType("_stub")
+        m.__dict__.update(attrs)
+        return m
+    
+    
+    _DB_INIT   = _pipeline_stub(run=MagicMock(return_value=None))
+    _EXTRACT   = _pipeline_stub(run=MagicMock(return_value=0))
+    _NEWS_INGEST = _pipeline_stub(run=MagicMock(return_value=0))
+    _LOAD      = _pipeline_stub(run=MagicMock(return_value=0))
+    _TRANSFORM = _pipeline_stub(
+        run=MagicMock(return_value=0),
+        transform_prices=MagicMock(return_value=0),
+        transform_fundamentals=MagicMock(return_value=0),
+        transform_news=MagicMock(return_value=0),
+    )
+    
+    _fake_settings = MagicMock()
+    _fake_settings.nse_symbols = ["RELIANCE.NS", "TCS.NS"]
+    _SETTINGS_MOD = _pipeline_stub(settings=_fake_settings)
+    
+    for _path, _stub in {
+        "backend.pipeline.db_init":    _DB_INIT,
+        "backend.pipeline.extract":    _EXTRACT,
+        "backend.pipeline.news_ingest": _NEWS_INGEST,
+        "backend.pipeline.load":       _LOAD,
+        "backend.pipeline.transform":  _TRANSFORM,
+        "backend.pipeline.settings":   _SETTINGS_MOD,
+    }.items():
+        sys.modules.setdefault(_path, _stub)
+    
+    
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # Load the DAG module from disk (bypass package import machinery)
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    
+    _DAG_FILE = (
+        pathlib.Path(__file__).parent.parent
+        / "backend" / "dags" / "stock_pipeline_dag.py"
+    )
+    
+    _spec = importlib.util.spec_from_file_location(
+        "backend.dags.stock_pipeline_dag",
+        str(_DAG_FILE),
+    )
+    dag_module = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
+    sys.modules["backend.dags.stock_pipeline_dag"] = dag_module
+>   _spec.loader.exec_module(dag_module)  # type: ignore[union-attr]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_stock_pipeline_dag.py:192: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <_frozen_importlib_external.SourceFileLoader object at 0x00000273E4A4FE30>
+module = <module 'backend.dags.stock_pipeline_dag' from 'D:\\NSE_Data\\backend\\dags\\stock_pipeline_dag.py'>
+
+>   ???
+
+<frozen importlib._bootstrap_external>:759: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+f = <built-in function exec>
+args = (<code object <module> at 0x00000273E2984F50, file "D:\NSE_Data\backend\dags\stock_pipeline_dag.py", line 1>, {'DAG': ...econds=7200), ...}, 'Optional': typing.Optional, 'PythonOperator': <class 'tests.test_stock_pipeline_dag._Task'>, ...})
+kwds = {}
+
+>   ???
+
+<frozen importlib._bootstrap>:491: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    """
+    backend/dags/stock_pipeline_dag.py
+    ====================================
+    Airflow DAG: stock_pipeline  (Sprint 4)
+    Schedule : Mon-Fri at 18:30 IST (13:00 UTC) ù after NSE market closes.
+    
+    8-task topology (fan-out after db_init, fan-in before load_gold):
+    
+            \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510
+            \u2502    db_init      \u2502   Task 1 \u2014 idempotent schema DDL
+            \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518
+            \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510
+            \u25bc                 \u25bc
+      extract_prices    news_ingest         Tasks 2 & 3 ù run in parallel
+            \u25bc                 \u25bc
+      transform_prices  transform_news      Tasks 4 & 5 ù run in parallel
+            \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518
+                     \u25bc
+                load_gold                   Task 6 \u2014 silver \u2192 gold + ChromaDB
+                     \u25bc
+               create_views                 Task 7 ù materialise analytical SQL views
+                     \u25bc
+             validate_schema                Task 8 ù star-schema integrity checks
+    
+    Design decisions
+    \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    * PythonOperator used throughout so tasks run in the same venv/Docker image.
+    * No XCom between tasks ù each stage reads what the previous one persisted in
+      PostgreSQL (bronze \u2192 silver \u2192 gold).
+    * All python_callable functions are idempotent (UPSERT / CREATE OR REPLACE).
+    * transform_prices calls transform_prices() + transform_fundamentals(); transform_news
+      calls transform_news() ù each only touches its own silver table for clean retries.
+    * Tasks 7+8 use a lightweight SqlScriptOperator shim that executes the
+      checked-in SQL files ù keeps SQL out of the DAG file.
+    
+    Environment variables required (set in Airflow Variables or .env):
+      NSE_SYMBOLS, POSTGRES_*, HUGGING_FACE_API_KEY / HF_API_TOKEN,
+      CHROMADB_*, NEWS_API_KEY  (see backend/pipeline/settings.py)
+    """
+    
+    from __future__ import annotations
+    
+    import logging
+    import os
+    import pathlib
+    from datetime import datetime, timedelta
+    from typing import Optional
+    
+    from airflow import DAG
+    from airflow.operators.python import PythonOperator
+    
+    # Pipeline modules ù must be importable inside the Airflow worker container.
+    # The docker-compose mounts ./backend \u2192 /opt/airflow/backend so the import
+    # path is backend.pipeline.*
+    from backend.pipeline import db_init, extract, news_ingest, load
+    from backend.pipeline import transform
+    from backend.pipeline.transform import (
+        transform_prices,
+        transform_fundamentals,
+        transform_news as _transform_news_fn,
+    )
+    from backend.pipeline.settings import settings
+    
+    logger = logging.getLogger(__name__)
+    
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # Paths to checked-in SQL helper files
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    
+    _SQL_DIR = pathlib.Path(__file__).parent.parent / "sql"
+    _CREATE_VIEWS_SQL = _SQL_DIR / "create_views.sql"
+    _VALIDATE_SQL = _SQL_DIR / "validate_star_schema.sql"
+    
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # Default arguments (applied to every task unless overridden)
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    
+    DEFAULT_ARGS: dict = {
+        "owner": "nse-data-team",
+        "depends_on_past": False,
+        "email_on_failure": False,
+        "email_on_retry": False,
+        "retries": 2,
+        "retry_delay": timedelta(minutes=5),
+        "execution_timeout": timedelta(hours=2),
+    }
+    
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # Task callables
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    
+    
+    def _task_db_init(**_: object) -> None:
+        """Task 1 ù Ensure all schemas, tables, and roles exist (idempotent DDL).
+    
+        Delegates to backend.pipeline.db_init.run() which executes every DDL
+        statement inside DDL_STATEMENTS with autocommit=True.  Safe to run on
+        every DAG execution; CREATE à IF NOT EXISTS guards prevent collisions.
+        """
+        db_init.run()
+    
+    
+    def _task_extract_prices(symbols: list[str], **_: object) -> int:
+        """Task 2 \u2014 Pull OHLCV + fundamentals from Yahoo Finance \u2192 bronze layer."""
+        return extract.run(symbols=symbols)
+    
+    
+    def _task_news_ingest(symbols: list[str], **_: object) -> int:
+        """Task 3 \u2014 Fetch latest headlines from NewsAPI \u2192 bronze.raw_news."""
+        return news_ingest.run(symbols=symbols)
+    
+    
+    def _task_transform_prices(symbols: list[str], **_: object) -> dict[str, int]:
+        """Task 4 \u2014 Clean prices/fundamentals, compute indicators \u2192 silver layer.
+    
+        Calls the module-level transform_prices() + transform_fundamentals() for
+        each symbol so it is independently retriable without re-running news NLP.
+        """
+        from datetime import date
+        run_date = date.today()
+        totals: dict[str, int] = {"prices": 0, "fundamentals": 0}
+        for sym in symbols:
+            totals["prices"] += transform_prices(sym, run_date)
+            totals["fundamentals"] += transform_fundamentals(sym)
+        logger.info("transform_prices complete: %s", totals)
+        return totals
+    
+    
+    def _task_transform_news(symbols: list[str], **_: object) -> int:
+        """Task 5 \u2014 Summarise + sentiment-score news via HF API \u2192 silver.news.
+    
+        Calls transform_news() for each symbol.  Completely independent of the
+        prices path so it can retry in isolation after a NewsAPI or HF hiccup.
+        """
+        total = 0
+        for sym in symbols:
+            total += _transform_news_fn(sym)
+        logger.info("transform_news complete: %d rows", total)
+        return total
+    
+    
+    def _task_load_gold(symbols: list[str], **_: object) -> int:
+        """Task 6 ù Materialise gold.stock_summary, gold.news_feed, upsert ChromaDB."""
+        return load.run(symbols=symbols)
+    
+    
+    def _task_create_views(**_: object) -> None:
+        """Task 7 ù (Re)create the five analytical gold.v_* views from SQL file.
+    
+        Reads backend/sql/create_views.sql and executes it via psycopg2 so the
+        views are always in sync with the checked-in SQL definition.
+        """
+        import psycopg2
+    
+        sql_text = _CREATE_VIEWS_SQL.read_text(encoding="utf-8")
+        conn = psycopg2.connect(
+            host=settings.postgres_host,
+            port=settings.postgres_port,
+            dbname=settings.postgres_db,
+            user=settings.postgres_user,
+            password=settings.postgres_password,
+            connect_timeout=10,
+        )
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(sql_text)
+            logger.info("create_views: executed %s successfully", _CREATE_VIEWS_SQL.name)
+        finally:
+            conn.close()
+    
+    
+    def _task_validate_schema(**_: object) -> None:
+        """Task 8 ù Run star-schema integrity checks; RAISE WARNING if issues found.
+    
+        Executes backend/sql/validate_star_schema.sql which uses DO $$ à $$
+        blocks to assert FK integrity, check for orphans, duplicate facts,
+        silver\u2192gold coverage gaps, and dim_date calendar continuity.
+        Logs any WARNING notices emitted by PostgreSQL; does NOT fail the DAG
+        (warnings are advisory) unless the SQL itself raises an exception.
+        """
+        import psycopg2
+        import psycopg2.extras
+    
+        sql_text = _VALIDATE_SQL.read_text(encoding="utf-8")
+    
+        conn = psycopg2.connect(
+            host=settings.postgres_host,
+            port=settings.postgres_port,
+            dbname=settings.postgres_db,
+            user=settings.postgres_user,
+            password=settings.postgres_password,
+            connect_timeout=10,
+        )
+        # Surface RAISE NOTICE / RAISE WARNING messages from PostgreSQL as Python logs
+        conn.notices.clear()  # type: ignore[attr-defined]
+    
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(sql_text)
+            for notice in conn.notices:  # type: ignore[attr-defined]
+                level = logging.WARNING if "WARNING" in notice.upper() else logging.INFO
+                logger.log(level, "PG: %s", notice.strip())
+            logger.info("validate_schema: %s completed", _VALIDATE_SQL.name)
+        finally:
+            conn.close()
+    
+    
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # DAG definition
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    
+    with DAG(
+        dag_id="stock_pipeline",
+        description=(
+            "NSE daily ETL \u2014 8 tasks: db_init \u2192 [extract_prices \u2016 news_ingest] \u2192 "
+            "[transform_prices \u2016 transform_news] \u2192 load_gold \u2192 create_views \u2192 validate_schema"
+        ),
+        default_args=DEFAULT_ARGS,
+        schedule="30 13 * * 1-5",   # 18:30 IST = 13:00 UTC, weekdays only
+        start_date=datetime(2025, 1, 1),
+        catchup=False,
+        max_active_runs=1,
+        tags=["nse", "finance", "etl", "sprint4"],
+    ) as dag:
+    
+        # \u2500\u2500 Shared op_kwargs \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        _symbols_kwargs = {"symbols": settings.nse_symbols}
+    
+        # \u2500\u2500 Task 1: Schema initialisation (must always run first) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    
+        t1_db_init = PythonOperator(
+            task_id="db_init",
+            python_callable=_task_db_init,
+            doc_md="""\
+    **db_init** ù Idempotent DDL runner.
+    Creates/migrates bronze, silver, gold schemas; tables; roles; grants.
+    Must complete before any data-touching task starts.
+    """,
+        )
+    
+        # \u2500\u2500 Task 2: Extract prices + fundamentals (runs in parallel with Task 3) \u2500\u2500
+    
+        t2_extract_prices = PythonOperator(
+            task_id="extract_prices",
+            python_callable=_task_extract_prices,
+            op_kwargs=_symbols_kwargs,
+            doc_md="""\
+    **extract_prices** ù Pulls OHLCV history and key fundamentals from
+    Yahoo Finance (`yfinance`) for every symbol in `NSE_SYMBOLS`.
+    Writes to `bronze.raw_prices` and `bronze.raw_fundamentals` (UPSERT).
+    """,
+        )
+    
+        # \u2500\u2500 Task 3: News ingestion (parallel with Task 2) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    
+        t3_news_ingest = PythonOperator(
+            task_id="news_ingest",
+            python_callable=_task_news_ingest,
+            op_kwargs=_symbols_kwargs,
+            doc_md="""\
+    **news_ingest** ù Fetches stock-market headlines from NewsAPI.
+    Deduplicates on SHA-256 content hash (Rule 6) and writes to
+    `bronze.raw_news`.  Exits cleanly if `NEWS_API_KEY` is absent.
+    """,
+        )
+    
+        # \u2500\u2500 Task 4: Transform prices (runs after Task 2 only) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    
+        t4_transform_prices = PythonOperator(
+            task_id="transform_prices",
+            python_callable=_task_transform_prices,
+            op_kwargs=_symbols_kwargs,
+            doc_md="""\
+    **transform_prices** ù Cleans OHLCV, computes SMA/EMA/RSI, normalises
+    52-week returns (Rule 4), flags z-score outliers (Rule 7).
+    Writes to `silver.prices` and `silver.fundamentals`.
+    """,
+        )
+    
+        # \u2500\u2500 Task 5: Transform news with HF sentiment (runs after Task 3 only) \u2500\u2500\u2500\u2500
+    
+        t5_transform_news = PythonOperator(
+            task_id="transform_news",
+            python_callable=_task_transform_news,
+            op_kwargs=_symbols_kwargs,
+            doc_md="""\
+    **transform_news** ù Sends headlines through HuggingFace inference API
+    (rate-budgeted, Rule 1) for BART summarisation and FinBERT sentiment.
+    Deduplicates and writes to `silver.news`.
+    """,
+        )
+    
+        # \u2500\u2500 Task 6: Load silver \u2192 gold + ChromaDB \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    
+        t6_load_gold = PythonOperator(
+            task_id="load_gold",
+            python_callable=_task_load_gold,
+            op_kwargs=_symbols_kwargs,
+            doc_md="""\
+    **load_gold** ù Materialises `gold.stock_summary`, `gold.news_feed`,
+    and the star-schema dimension/fact tables.  Upserts sentence-transformer
+    embeddings into ChromaDB (Rule 2).
+    """,
+        )
+    
+        # \u2500\u2500 Task 7: Create / refresh analytical views \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    
+        t7_create_views = PythonOperator(
+            task_id="create_views",
+            python_callable=_task_create_views,
+            doc_md="""\
+    **create_views** ù Executes `backend/sql/create_views.sql` to
+    `CREATE OR REPLACE` the five analytical gold views:
+    `v_latest_prices`, `v_market_pulse`, `v_sector_momentum`,
+    `v_news_sentiment`, `v_portfolio_risk`.
+    """,
+        )
+    
+        # \u2500\u2500 Task 8: Star-schema integrity validation \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    
+        t8_validate_schema = PythonOperator(
+            task_id="validate_schema",
+            python_callable=_task_validate_schema,
+            doc_md="""\
+    **validate_schema** ù Executes `backend/sql/validate_star_schema.sql`.
+    Checks FK integrity, orphan dimensions, duplicate facts, silver\u2192gold
+    coverage gaps, and dim_date calendar continuity.  Emits PostgreSQL
+    NOTICE/WARNING messages as Airflow log entries.
+    """,
+        )
+    
+        # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        # Explicit dependency wiring
+        # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        #
+        # Phase A ù init:          db_init
+        # Phase B ù ingest:        extract_prices   news_ingest        (parallel)
+        # Phase C ù transform:     transform_prices transform_news     (parallel)
+        # Phase D ù consolidate:   load_gold
+        # Phase E \u2014 finalise:      create_views \u2192 validate_schema      (serial)
+        #
+        # Fan-out after db_init:
+        t1_db_init >> [t2_extract_prices, t3_news_ingest]
+    
+        # extract_prices feeds only its transform; news_ingest feeds only its transform:
+        t2_extract_prices >> t4_transform_prices
+        t3_news_ingest    >> t5_transform_news
+    
+        # Fan-in: load_gold waits for BOTH transforms to finish:
+>       [t4_transform_prices, t5_transform_news] >> t6_load_gold
+E       TypeError: unsupported operand type(s) for >>: 'list' and '_Task'
+
+backend\dags\stock_pipeline_dag.py:352: TypeError
+=========================== short test summary info ===========================
+ERROR tests/test_stock_pipeline_dag.py - TypeError: unsupported operand type(...
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+============================== 1 error in 0.38s ===============================

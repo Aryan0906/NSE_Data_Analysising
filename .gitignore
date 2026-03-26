@@ -1,0 +1,74 @@
+# =============================================================
+# NSE Stock Market Pipeline — .gitignore
+# =============================================================
+
+# --- Secrets (NEVER commit) ---------------------------------
+.env
+*.pem
+*.key
+*.crt
+secrets/
+
+# --- Python -------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+*.so
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+*.cover
+
+# --- Data / models (large binaries) -------------------------
+data/raw/
+data/staging/
+*.parquet
+*.feather
+*.pkl
+*.h5
+*.hdf5
+*.ckpt
+*.pt
+*.pth
+
+# Earnings PDFs — tracked by Git LFS if needed
+data/earnings/*.pdf
+
+# --- ChromaDB local data (if not using Docker) ---------------
+chromadb_local/
+chroma/
+
+# --- Airflow local -----------------------------------------
+airflow.db
+airflow.cfg
+logs/
+airflow/logs/
+airflow/dags/__pycache__/
+
+# --- Docker -------------------------------------------------
+docker_data/
+
+# --- IDE / OS -----------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Jupyter ------------------------------------------------
+.ipynb_checkpoints/
+*.ipynb
+
+# --- Node (Streamlit custom components if any) ---------------
+node_modules/

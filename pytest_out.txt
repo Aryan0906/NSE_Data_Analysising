@@ -1,0 +1,111 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.3, pytest-9.0.2, pluggy-1.6.0
+rootdir: D:\NSE_Data
+plugins: anyio-4.12.1, dash-4.0.0, cov-7.0.0
+collected 45 items
+
+tests\test_stock_pipeline_dag.py ...............F......FFFFFF........... [ 86%]
+......                                                                   [100%]
+
+================================== FAILURES ===================================
+_________________ TestDependencyGraph.test_all_expected_edges _________________
+
+self = <tests.test_stock_pipeline_dag.TestDependencyGraph object at 0x0000024A4A591E50>
+
+    def test_all_expected_edges(self):
+        for up, down in EXPECTED_EDGES:
+>           assert down in _downstream(up), f"Missing edge: {up} >> {down}"
+E           AssertionError: Missing edge: transform_prices >> load_gold
+E           assert 'load_gold' in set()
+E            +  where set() = _downstream('transform_prices')
+
+tests\test_stock_pipeline_dag.py:369: AssertionError
+_____________ TestDependencyGraph.test_transform_prices_upstream ______________
+
+self = <tests.test_stock_pipeline_dag.TestDependencyGraph object at 0x0000024A4A5C5A50>
+
+    def test_transform_prices_upstream(self):
+>       assert _upstream("transform_prices") == {"extract_prices"}
+E       AssertionError: assert {'extract_pri..., 'load_gold'} == {'extract_prices'}
+E         
+E         Extra items in the left set:
+E         'load_gold'
+E         Use -v to get more diff
+
+tests\test_stock_pipeline_dag.py:390: AssertionError
+____________ TestDependencyGraph.test_transform_prices_downstream _____________
+
+self = <tests.test_stock_pipeline_dag.TestDependencyGraph object at 0x0000024A4A5C5C50>
+
+    def test_transform_prices_downstream(self):
+>       assert _downstream("transform_prices") == {"load_gold"}
+E       AssertionError: assert set() == {'load_gold'}
+E         
+E         Extra items in the right set:
+E         'load_gold'
+E         Use -v to get more diff
+
+tests\test_stock_pipeline_dag.py:393: AssertionError
+______________ TestDependencyGraph.test_transform_news_upstream _______________
+
+self = <tests.test_stock_pipeline_dag.TestDependencyGraph object at 0x0000024A4A5B9130>
+
+    def test_transform_news_upstream(self):
+>       assert _upstream("transform_news") == {"news_ingest"}
+E       AssertionError: assert {'load_gold', 'news_ingest'} == {'news_ingest'}
+E         
+E         Extra items in the left set:
+E         'load_gold'
+E         Use -v to get more diff
+
+tests\test_stock_pipeline_dag.py:396: AssertionError
+_____________ TestDependencyGraph.test_transform_news_downstream ______________
+
+self = <tests.test_stock_pipeline_dag.TestDependencyGraph object at 0x0000024A4A5B9310>
+
+    def test_transform_news_downstream(self):
+>       assert _downstream("transform_news") == {"load_gold"}
+E       AssertionError: assert set() == {'load_gold'}
+E         
+E         Extra items in the right set:
+E         'load_gold'
+E         Use -v to get more diff
+
+tests\test_stock_pipeline_dag.py:399: AssertionError
+__________________ TestDependencyGraph.test_load_gold_fanin ___________________
+
+self = <tests.test_stock_pipeline_dag.TestDependencyGraph object at 0x0000024A4A601550>
+
+    def test_load_gold_fanin(self):
+>       assert _upstream("load_gold") == {"transform_prices", "transform_news"}
+E       AssertionError: assert set() == {'transform_n...sform_prices'}
+E         
+E         Extra items in the right set:
+E         'transform_prices'
+E         'transform_news'
+E         Use -v to get more diff
+
+tests\test_stock_pipeline_dag.py:402: AssertionError
+________________ TestDependencyGraph.test_load_gold_downstream ________________
+
+self = <tests.test_stock_pipeline_dag.TestDependencyGraph object at 0x0000024A4A6018D0>
+
+    def test_load_gold_downstream(self):
+>       assert _downstream("load_gold") == {"create_views"}
+E       AssertionError: assert {'create_view...sform_prices'} == {'create_views'}
+E         
+E         Extra items in the left set:
+E         'transform_prices'
+E         'transform_news'
+E         Use -v to get more diff
+
+tests\test_stock_pipeline_dag.py:405: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_stock_pipeline_dag.py::TestDependencyGraph::test_all_expected_edges
+FAILED tests/test_stock_pipeline_dag.py::TestDependencyGraph::test_transform_prices_upstream
+FAILED tests/test_stock_pipeline_dag.py::TestDependencyGraph::test_transform_prices_downstream
+FAILED tests/test_stock_pipeline_dag.py::TestDependencyGraph::test_transform_news_upstream
+FAILED tests/test_stock_pipeline_dag.py::TestDependencyGraph::test_transform_news_downstream
+FAILED tests/test_stock_pipeline_dag.py::TestDependencyGraph::test_load_gold_fanin
+FAILED tests/test_stock_pipeline_dag.py::TestDependencyGraph::test_load_gold_downstream
+======================== 7 failed, 38 passed in 0.39s =========================
