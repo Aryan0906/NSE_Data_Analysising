@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 
 from frontend.components.db_connector import fetch_data, get_tickers
 from frontend.components.charts import plot_candlestick, plot_volume_bar
