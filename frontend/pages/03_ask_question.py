@@ -261,15 +261,15 @@ if tickers:
     selected_stock = st.selectbox("Select a stock", tickers)
     
     if selected_stock:
+        base_symbol = selected_stock.replace('.NS', '')
+
         prices_query = f"""
             SELECT trade_date, close_price
-            FROM silver.prices 
-            WHERE symbol = '{selected_stock}'
+            FROM silver.prices
+            WHERE symbol = '{base_symbol}'
             ORDER BY trade_date DESC
             LIMIT 30
         """
-        
-        base_symbol = selected_stock.replace('.NS', '')
         news_query = f"""
             SELECT headline, published_at, sentiment_score, source
             FROM gold.news_feed 
