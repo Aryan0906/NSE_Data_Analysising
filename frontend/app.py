@@ -1,4 +1,10 @@
+import os
+import sys
 import streamlit as st
+
+# Append the project root dynamically to the Python Path 
+# so Streamlit pages can resolve "frontend.*" and "backend.*" imports natively
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 st.set_page_config(
     page_title="NSE Stock Pipeline",

@@ -4,7 +4,7 @@ from typing import List
 
 from sqlalchemy import create_engine, text
 
-from backend.ml.hf_client import HFClient
+from backend.pipeline.hf_client import HFClient
 from backend.pipeline.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -48,30 +48,21 @@ class EarningsSummariser:
         return chunks
 
     def fetch_summary(self, text_chunk: str) -> str:
-        """Call HF inference API via HFClient."""
-        # The payload format required by HuggingFace Inference API for summarisation
-        payload = {
-            "inputs": text_chunk,
-            "parameters": {"max_length": 130, "min_length": 30, "do_sample": False}
-        }
-        
-        response = self.hf_client.query(model=self.model, payload=payload)
-        
-        if response and isinstance(response, list) and "summary_text" in response[0]:
-            return response[0]["summary_text"]
-        elif response and isinstance(response, dict) and "error" in response:
-            logger.error(f"HF API Error: {response['error']}")
+        """Call HF inference API via refactored HFClient."""
+        try:
+            return self.hf_client.summarization(text=text_chunk, model=self.model)
+        except Exception as e:
+            logger.error(f"HF Inference API Error: {e}")
             return ""
-        return ""
 
-    def summarise(self, ticker: str, report_date: str, source_file: str, text: str) -> str:
+    def summarise(self, ticker: str, report_date: str, source_file: str, raw_text: str) -> str:
         """
         Produce a chunked summary for an entire earnings report,
         then save the combined summary to PostgreSQL.
         """
-        logger.info(f"Summarising {len(text)} chars for {ticker} ({report_date})")
+        logger.info(f"Summarising {len(raw_text)} chars for {ticker} ({report_date})")
         
-        chunks = self._chunk_text(text)
+        chunks = self._chunk_text(raw_text)
         logger.info(f"Split into {len(chunks)} chunks.")
         
         chunk_summaries = []
@@ -98,7 +89,7 @@ class EarningsSummariser:
                     "ticker": ticker,
                     "report_date": report_date,
                     "source_file": source_file,
-                    "raw_text_length": len(text),
+                    "raw_text_length": len(raw_text),
                     "summary": final_summary
                 })
             logger.info("Summary saved successfully.")

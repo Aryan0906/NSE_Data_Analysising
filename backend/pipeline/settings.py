@@ -14,17 +14,23 @@ Usage::
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 from pydantic import Field, PostgresDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Resolve absolute path to the project-root .env file
+# This ensures Streamlit pages (run from any CWD) always find the correct .env
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_ENV_FILE = _PROJECT_ROOT / ".env"
 
 
 class Settings(BaseSettings):
     """Application settings — all values sourced from env / .env file."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",  # ignore unknown env vars
@@ -58,8 +64,8 @@ class Settings(BaseSettings):
     )
 
     # ── ETL ──────────────────────────────────────────────────────────────────
-    nse_symbols: list[str] = Field(
-        default_factory=list, alias="NSE_SYMBOLS"
+    nse_symbols_raw: str = Field(
+        "", alias="NSE_SYMBOLS"
     )
     etl_lookback_days: int = Field(365, alias="ETL_LOOKBACK_DAYS")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
@@ -72,15 +78,12 @@ class Settings(BaseSettings):
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 
-    @field_validator("nse_symbols", mode="before")
-    @classmethod
-    def _parse_symbols(cls, v: object) -> list[str]:
-        """Accept comma-separated string or list."""
-        if isinstance(v, str):
-            return [s.strip() for s in v.split(",") if s.strip()]
-        if isinstance(v, list):
-            return v
-        return []
+    @property
+    def nse_symbols(self) -> list[str]:
+        """Parse comma-separated string dynamically into a list."""
+        if not self.nse_symbols_raw:
+            return []
+        return [s.strip() for s in self.nse_symbols_raw.split(",") if s.strip()]
 
     @field_validator("log_level")
     @classmethod

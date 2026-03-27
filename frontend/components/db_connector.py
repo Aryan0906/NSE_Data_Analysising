@@ -29,19 +29,18 @@ def fetch_data(query: str, params: dict = None) -> pd.DataFrame:
     safe_query = guard_sql(query)
     
     with engine.connect() as conn:
-        if params:
-            df = pd.read_sql(text(safe_query), conn, params=params)
-        else:
-            df = pd.read_sql(text(safe_query), conn)
-            
-    return df
+        result = conn.execute(text(safe_query), params or {})
+        rows = result.fetchall()
+        columns = list(result.keys())
+    
+    return pd.DataFrame(rows, columns=columns)
 
 def get_tickers():
     """Get active tickers from dim_companies."""
     query = """
         SELECT symbol 
         FROM gold.dim_companies 
-        WHERE is_active = TRUE
+        WHERE is_current = TRUE
         ORDER BY symbol
     """
     df = fetch_data(query)

@@ -5,8 +5,7 @@ Thin wrapper around the HuggingFace Inference API that enforces the
 ≤80 calls/day rate limit (Rule 1) using a PostgreSQL-backed counter.
 
 Every call to summarise() or get_sentiment() first checks the daily budget.
-If the budget is exhausted the caller receives None and the pipeline continues
-gracefully without the enrichment.
+If the budget is exhausted, it throws a RuntimeError.
 
 Rate-limit state is stored in public.hf_api_calls:
     date_key DATE PRIMARY KEY, call_count INT DEFAULT 0
@@ -16,12 +15,14 @@ The table is created here on first use (idempotent).
 from __future__ import annotations
 
 import logging
+import time
+import json
 from datetime import date
 from typing import Optional
 
 import psycopg2
 import psycopg2.extras
-import requests
+from huggingface_hub import InferenceClient
 
 from backend.pipeline.settings import settings
 
@@ -31,8 +32,6 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | hf_client | %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
-
-_HF_INFERENCE_BASE = "https://api-inference.huggingface.co/models"
 
 # ─────────────────────────────────────────────────
 # Rate-limit table (created once, idempotent)
@@ -104,44 +103,102 @@ def _increment_daily_count(today: date) -> None:
         conn.commit()
 
 
-def _budget_check() -> bool:
-    """Return True if a call may proceed, False if daily limit reached (Rule 1)."""
+def _budget_check() -> None:
+    """Check daily budget and raise Exception if limit reached (Rule 1)."""
     if not settings.hf_api_token:
-        logger.debug("HF_API_TOKEN not set — HF calls disabled.")
-        return False
-
+        logger.warning("HF_API_TOKEN not set — HF calls might fail.")
+        
     today = date.today()
     count = _get_daily_count(today)
     if count >= settings.hf_daily_call_limit:
-        logger.warning(
-            "HF daily call limit reached (%d/%d) — skipping.",
+        logger.error(
+            "HF daily call limit reached (%d/%d) — raising Exception.",
             count, settings.hf_daily_call_limit,
         )
-        return False
-    return True
+        raise RuntimeError(f"Rule 1 Violation: HF daily API budget exhausted ({count}/{settings.hf_daily_call_limit})")
 
 
 # ─────────────────────────────────────────────────
 # Inference helpers
 # ─────────────────────────────────────────────────
 
-def _post_inference(model: str, payload: dict) -> Optional[dict | list]:
-    """POST to HF Inference API; returns parsed JSON or None on error."""
-    url = f"{_HF_INFERENCE_BASE}/{model}"
-    headers = {"Authorization": f"Bearer {settings.hf_api_token}"}
+def _get_client() -> InferenceClient:
+    return InferenceClient(
+        provider="hf-inference",
+        api_key=settings.hf_api_token,
+    )
 
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=30)
-        resp.raise_for_status()
-        _increment_daily_count(date.today())
-        return resp.json()
-    except requests.RequestException as exc:
-        logger.error("HF inference error [%s]: %s", model, exc)
-        return None
+def _execute_with_retry(func, *args, **kwargs):
+    """Executes a function obeying Rule 1 (1s sleep, exponential backoff on 503)."""
+    max_retries = 3
+    base_delay = 2
+    
+    for attempt in range(max_retries + 1):
+        try:
+            # Rule 1: 1 second sleep between calls
+            time.sleep(1)
+            result = func(*args, **kwargs)
+            _increment_daily_count(date.today())
+            return result
+        except Exception as e:
+            # Detect 503 errors (typically embedded in the error string or as HTTPError)
+            error_str = str(e)
+            is_503 = (
+                "503 Service Unavailable" in error_str or 
+                "503" in error_str or 
+                "Model is currently loading" in error_str
+            )
+            
+            if is_503 and attempt < max_retries:
+                delay = base_delay ** attempt
+                logger.warning(f"HF API 503 Service Unavailable. Retrying in {delay}s... (Attempt {attempt+1}/{max_retries})")
+                time.sleep(delay)
+            else:
+                logger.error(f"HF inference error: {e}")
+                raise
 
 
 # ─────────────────────────────────────────────────
 # Public API
+# ─────────────────────────────────────────────────
+
+class HFClient:
+    """Class-based wrapper around HF API for compatibility with ML modules."""
+    def __init__(self, db_engine=None):
+        self.db_engine = db_engine
+
+    def query(self, model: str, payload: dict) -> Optional[dict | list]:
+        """Legacy payload poster for RAG"""
+        _budget_check()
+        client = _get_client()
+        result_bytes = _execute_with_retry(client.post, json=payload, model=model)
+        try:
+            return json.loads(result_bytes.decode('utf-8'))
+        except BaseException:
+            return None
+            
+    def summarization(self, text: str, model: str) -> str:
+        """Execute inference using native huggingface_hub client."""
+        _budget_check()
+        client = _get_client()
+        
+        # Native Hugging Face inference helper
+        def _call():
+            return client.summarization(text, model=model)
+            
+        result = _execute_with_retry(_call)
+        
+        if isinstance(result, str):
+            return result
+        elif isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict) and "summary_text" in result[0]:
+            return result[0]["summary_text"]
+        elif hasattr(result, "summary_text"):
+            return result.summary_text
+        return str(result)
+
+
+# ─────────────────────────────────────────────────
+# Standalone convenience functions (used by transform.py)
 # ─────────────────────────────────────────────────
 
 def summarise(text: str, max_length: int = 130, min_length: int = 30) -> Optional[str]:
@@ -150,23 +207,31 @@ def summarise(text: str, max_length: int = 130, min_length: int = 30) -> Optiona
     Returns the summary string, or None if the budget is exhausted / error.
     Maps to Rule 1: ≤80 HF calls/day.
     """
-    if not _budget_check():
+    try:
+        _budget_check()
+    except RuntimeError:
         return None
 
-    result = _post_inference(
-        settings.hf_summarisation_model,
-        {
-            "inputs": text[:1024],   # BART max input tokens ~ 1024
-            "parameters": {
-                "max_length": max_length,
-                "min_length": min_length,
-                "do_sample": False,
-            },
-        },
-    )
-    if isinstance(result, list) and result:
-        return result[0].get("summary_text")
-    return None
+    client = _get_client()
+
+    def _call():
+        return client.summarization(
+            text[:1024],
+            model=settings.hf_summarisation_model,
+        )
+
+    try:
+        result = _execute_with_retry(_call)
+        if isinstance(result, str):
+            return result
+        elif hasattr(result, "summary_text"):
+            return result.summary_text
+        elif isinstance(result, list) and result:
+            return result[0].get("summary_text")
+        return str(result)
+    except Exception as exc:
+        logger.error("Summarise error: %s", exc)
+        return None
 
 
 def get_sentiment(text: str) -> Optional[float]:
@@ -175,13 +240,22 @@ def get_sentiment(text: str) -> Optional[float]:
     Returns a float in [-1, 1]:  positive → +score, negative → -score.
     Returns None if the budget is exhausted / error.
     """
-    if not _budget_check():
+    try:
+        _budget_check()
+    except RuntimeError:
         return None
 
-    result = _post_inference(
-        settings.hf_sentiment_model,
-        {"inputs": text[:512]},  # BERT max input
-    )
+    client = _get_client()
+
+    def _call():
+        return client.post(json={"inputs": text[:512]}, model=settings.hf_sentiment_model)
+
+    try:
+        result_bytes = _execute_with_retry(_call)
+        result = json.loads(result_bytes.decode("utf-8"))
+    except Exception as exc:
+        logger.error("Sentiment error: %s", exc)
+        return None
 
     # FinBERT returns: [[{"label": "positive"|"negative"|"neutral", "score": float}]]
     if not isinstance(result, list) or not result:

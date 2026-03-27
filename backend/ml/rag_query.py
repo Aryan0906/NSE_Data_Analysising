@@ -6,7 +6,7 @@ from chromadb.config import Settings as ChromaSettings
 from sentence_transformers import SentenceTransformer
 
 from backend.ml.embeddings import EMBEDDING_MODEL_NAME
-from backend.ml.hf_client import HFClient
+from backend.pipeline.hf_client import HFClient
 from backend.pipeline.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -52,13 +52,18 @@ class RAGQueryEngine:
             include=["documents", "metadatas", "distances"]
         )
         
-        if not results['documents'] or not results['documents'][0]:
+        docs_res = results.get('documents') or [[]]
+        if not docs_res[0]:
             logger.warning("No documents found in ChromaDB collection.")
             return {"answer": "Insufficient data", "sources": []}
             
-        docs = results['documents'][0]
-        distances = results['distances'][0]
-        metadatas = results['metadatas'][0]
+        docs = docs_res[0]
+        
+        dist_res = results.get('distances') or [[1.0]*len(docs)]
+        distances = dist_res[0]
+        
+        meta_res = results.get('metadatas') or [[{}]*len(docs)]
+        metadatas = meta_res[0]
         
         # ChromaDB cosine distance: smaller is more similar.
         # But wait, distance is (1 - cosine_similarity). So similarity = 1 - distance.
@@ -103,3 +108,4 @@ class RAGQueryEngine:
             "answer": answer,
             "sources": sources
         }
+#
