@@ -261,7 +261,7 @@ INSERT INTO silver.fundamentals
 VALUES %s
 ON CONFLICT (symbol, report_period, metric_name) DO UPDATE SET
     metric_value = EXCLUDED.metric_value,
-    updated_at   = NOW();
+    validated_at = NOW();
 """
 
 

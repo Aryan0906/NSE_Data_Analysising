@@ -7,12 +7,9 @@ version: "3.9"
 # ============================================================
 
 x-airflow-common: &airflow-common
-  build:
-    context: .
-    dockerfile: Dockerfile.airflow
+  image: apache/airflow:2.8.4
   env_file: .env
   environment:
-    PYTHONPATH: /opt/airflow
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}

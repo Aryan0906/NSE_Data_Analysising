@@ -1,12 +1,17 @@
+from typing import TYPE_CHECKING, Optional
+
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Engine
 
 from backend.pipeline.settings import settings
 from backend.ml.sql_guard import guard_sql
 
 @st.cache_resource
-def get_readonly_engine():
+def get_readonly_engine() -> "Engine":
     """
     Creates a SQLAlchemy engine using the READONLY user credentials.
     Enforces the rule that the frontend UI cannot mutate data.
@@ -18,7 +23,7 @@ def get_readonly_engine():
     )
     return create_engine(readonly_dsn, pool_pre_ping=True)
 
-def fetch_data(query: str, params: dict = None) -> pd.DataFrame:
+def fetch_data(query: str, params: Optional[dict] = None) -> pd.DataFrame:
     """
     Fetches data safely into a pandas DataFrame.
     Enforces Rule 8 by passing the query through `guard_sql`.
@@ -30,10 +35,9 @@ def fetch_data(query: str, params: dict = None) -> pd.DataFrame:
     
     with engine.connect() as conn:
         result = conn.execute(text(safe_query), params or {})
-        rows = result.fetchall()
-        columns = list(result.keys())
-    
-    return pd.DataFrame(rows, columns=columns)
+        df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            
+    return df
 
 def get_tickers():
     """Get active tickers from dim_companies."""
