@@ -321,6 +321,9 @@ def transform_news(symbol: str, limit: int = 50) -> int:
     Enrich bronze news with HF summary + sentiment and upsert to silver.news.
     Processes at most *limit* un-enriched rows to preserve the HF budget.
     """
+    # Strip .NS suffix to match how news_ingest stores symbols
+    base_symbol = symbol.replace(".NS", "").upper()
+    
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
@@ -336,7 +339,7 @@ def transform_news(symbol: str, limit: int = 50) -> int:
                 ORDER BY b.published_at DESC
                 LIMIT %s
                 """,
-                (symbol, limit),
+                (base_symbol, limit),
             )
             rows = cur.fetchall()
 

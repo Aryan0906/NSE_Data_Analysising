@@ -40,11 +40,10 @@ def fetch_data(query: str, params: Optional[dict] = None) -> pd.DataFrame:
     return df
 
 def get_tickers():
-    """Get active tickers from dim_companies."""
+    """Get active tickers from stock_summary."""
     query = """
         SELECT symbol 
-        FROM gold.dim_companies 
-        WHERE is_current = TRUE
+        FROM gold.stock_summary 
         ORDER BY symbol
     """
     df = fetch_data(query)

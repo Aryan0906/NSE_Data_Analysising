@@ -22,24 +22,20 @@ if not selected_ticker:
     st.stop()
 
 
-# Fetch data using the gold view (if it exists, else fallback to raw gold tables)
-# In Sprint 3, we expect views to be in 'gold' schema
+# Fetch data from silver.prices (pipeline populates this table)
 query = f"""
     SELECT 
-        d.full_date as trading_date,
-        f.open_price,
-        f.high_price,
-        f.low_price,
-        f.close_price,
-        f.volume,
-        -- Need window functions for SMAs if views aren't exactly matching
-        AVG(f.close_price) OVER (ORDER BY d.full_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) as sma_20,
-        AVG(f.close_price) OVER (ORDER BY d.full_date ROWS BETWEEN 49 PRECEDING AND CURRENT ROW) as sma_50
-    FROM gold.fact_prices f
-    JOIN gold.dim_companies c ON f.company_key = c.company_key
-    JOIN gold.dim_date d ON f.date_key = d.date_key
-    WHERE c.symbol = '{selected_ticker}'
-    ORDER BY d.full_date ASC
+        trade_date as trading_date,
+        open_price,
+        high_price,
+        low_price,
+        close_price,
+        volume,
+        sma_20,
+        sma_50
+    FROM silver.prices
+    WHERE symbol = '{selected_ticker}'
+    ORDER BY trade_date ASC
 """
 
 df = fetch_data(query)
