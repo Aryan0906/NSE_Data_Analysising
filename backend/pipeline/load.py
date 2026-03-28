@@ -122,9 +122,12 @@ def load_stock_summary(symbols: list[str]) -> int:
     Materialise the gold.stock_summary table for *symbols*.
     Returns rows written.
     """
+    # Strip .NS suffix to match how prices are stored in silver
+    base_symbols = [s.replace(".NS", "") for s in symbols]
+
     with _get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(_GOLD_SUMMARY_UPSERT, (symbols,))
+            cur.execute(_GOLD_SUMMARY_UPSERT, (base_symbols,))
             written = cur.rowcount
         conn.commit()
     logger.info("Gold stock_summary — %d rows upserted", written)

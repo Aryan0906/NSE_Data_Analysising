@@ -28,8 +28,10 @@ from typing import Generator, Optional
 import psycopg2
 import psycopg2.extras
 import yfinance as yf
+import pandas as pd
 
 from backend.pipeline.settings import settings
+from backend.pipeline.nse_fetcher import get_nse_prices
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -150,41 +152,75 @@ def extract_prices(
     """
     Download OHLCV data for *symbols* between *start* and *end* and insert
     into bronze.raw_prices.  Returns total rows written.
+
+    Tries NSE API first (real-time, accurate), falls back to yfinance.
+    Always fetches today's real-time price from NSE API.
     """
     run_date = run_date or date.today()
     total_written = 0
 
     for symbol in symbols:
+        # Remove .NS suffix if present for NSE API
+        symbol_clean = symbol.replace(".NS", "")
         nse_symbol = symbol if symbol.endswith(".NS") else f"{symbol}.NS"
-        logger.info("Extracting prices for %s [%s → %s]", nse_symbol, start, end)
+        logger.info("Extracting prices for %s [%s → %s]", symbol_clean, start, end)
 
+        df = None
+
+        # Try NSE API first (real-time, most accurate)
+        # Fetch today's price separately for real-time data
         try:
-            ticker = yf.Ticker(nse_symbol)
-            df = ticker.history(
-                start=start.isoformat(),
-                end=end.isoformat(),
-                auto_adjust=False,
-                actions=False,
-            )
-        except Exception as exc:
-            logger.warning("yfinance error for %s: %s", nse_symbol, exc)
-            continue
+            logger.info("Fetching TODAY's real-time price from NSE API for %s", symbol_clean)
+            today_df = get_nse_prices(symbol_clean, date.today(), date.today())
+            if today_df is not None and not today_df.empty:
+                logger.info("✓ NSE API today's price for %s: ₹%.2f", symbol_clean, today_df.iloc[0]['Close'])
 
-        if df.empty:
-            logger.warning("No price data returned for %s", nse_symbol)
-            continue
+                # Then get historical data
+                logger.info("Fetching historical prices from NSE API for %s", symbol_clean)
+                hist_df = get_nse_prices(symbol_clean, start, end.replace(day=end.day-1))  # Exclude today from hist
+
+                if hist_df is not None and not hist_df.empty:
+                    df = pd.concat([hist_df, today_df], ignore_index=True)
+                    logger.info("✓ NSE API success: %d records for %s", len(df), symbol_clean)
+                else:
+                    df = today_df
+                    logger.info("✓ NSE API (today only): %d records for %s", len(df), symbol_clean)
+            else:
+                logger.warning("NSE API returned no data, falling back to yfinance")
+                df = None
+        except Exception as exc:
+            logger.warning("NSE API error for %s, falling back to yfinance: %s", symbol_clean, exc)
+            df = None
+
+        # Fallback to yfinance if NSE API fails
+        if df is None or df.empty:
+            try:
+                logger.info("Fetching from yfinance for %s", nse_symbol)
+                ticker = yf.Ticker(nse_symbol)
+                df = ticker.history(
+                    start=start.isoformat(),
+                    end=end.isoformat(),
+                    auto_adjust=False,
+                    actions=False,
+                )
+                if df.empty:
+                    logger.warning("No price data returned (yfinance) for %s", nse_symbol)
+                    continue
+            except Exception as exc:
+                logger.warning("yfinance error for %s: %s", nse_symbol, exc)
+                continue
 
         df = df.reset_index()
         rows = [
             (
-                symbol,                            # store original symbol (without .NS)
-                row["Date"].date(),
-                float(row["Open"])   if row["Open"]   == row["Open"] else None,
-                float(row["High"])   if row["High"]   == row["High"] else None,
-                float(row["Low"])    if row["Low"]    == row["Low"]  else None,
-                float(row["Close"])  if row["Close"]  == row["Close"] else None,
-                float(row["Adj Close"]) if row["Adj Close"] == row["Adj Close"] else None,
-                int(row["Volume"])   if row["Volume"] == row["Volume"] else None,
+                symbol_clean,                            # store original symbol (without .NS)
+                row["Date"].date() if hasattr(row["Date"], "date") else row["Date"],
+                float(row["Open"])   if pd.notna(row["Open"]) else None,
+                float(row["High"])   if pd.notna(row["High"]) else None,
+                float(row["Low"])    if pd.notna(row["Low"]) else None,
+                float(row["Close"])  if pd.notna(row["Close"]) else None,
+                float(row["Adj Close"]) if pd.notna(row["Adj Close"]) else None,
+                int(row["Volume"])   if pd.notna(row["Volume"]) else None,
             )
             for _, row in df.iterrows()
         ]
@@ -206,7 +242,7 @@ def extract_prices(
                 records_written=len(rows),
             )
 
-        logger.info("Upserted %d price rows for %s", len(rows), symbol)
+        logger.info("Upserted %d price rows for %s", len(rows), symbol_clean)
 
     logger.info("Price extraction complete — %d rows total", total_written)
     return total_written

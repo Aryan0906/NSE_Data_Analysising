@@ -5,6 +5,7 @@
 
 # --- Data extraction ----------------------------------------
 yfinance==0.2.40           # NSE tick & fundamental data
+nsepython==2.97            # Official NSE India API (real-time prices)
 requests==2.31.0           # HTTP for news API
 newsapi-python==0.2.7      # NewsAPI client (Rule 6)
 

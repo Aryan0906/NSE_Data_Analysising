@@ -4,10 +4,20 @@
 
 # --- Secrets (NEVER commit) ---------------------------------
 .env
+.env.local
+.env.*.local
 *.pem
 *.key
 *.crt
 secrets/
+
+# --- Claude Code / IDE personal settings --------------------
+.claude/
+.vscode/
+.idea/
+.github/
+*.swp
+*.swo
 
 # --- Python -------------------------------------------------
 __pycache__/
@@ -27,6 +37,7 @@ build/
 htmlcov/
 .coverage
 *.cover
+.pylintrc
 
 # --- Data / models (large binaries) -------------------------
 data/raw/
@@ -57,9 +68,13 @@ airflow/dags/__pycache__/
 # --- Docker -------------------------------------------------
 docker_data/
 
+# --- Test & Build outputs -----------------------------------
+pip.log
+pytest_out*.txt
+test_results/
+coverage.xml
+
 # --- IDE / OS -----------------------------------------------
-.idea/
-.vscode/
 *.swp
 *.swo
 .DS_Store
@@ -72,3 +87,6 @@ desktop.ini
 
 # --- Node (Streamlit custom components if any) ---------------
 node_modules/
+
+# --- Local documentation -------------------------------------
+REALTIME_SETUP.md

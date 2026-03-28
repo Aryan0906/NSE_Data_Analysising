@@ -23,8 +23,10 @@ if not selected_ticker:
 
 
 # Fetch data from silver.prices (pipeline populates this table)
+# Strip .NS suffix since symbols are stored without it
+symbol_clean = selected_ticker.replace('.NS', '') if selected_ticker else ""
 query = f"""
-    SELECT 
+    SELECT
         trade_date as trading_date,
         open_price,
         high_price,
@@ -34,7 +36,7 @@ query = f"""
         sma_20,
         sma_50
     FROM silver.prices
-    WHERE symbol = '{selected_ticker}'
+    WHERE symbol = '{symbol_clean}'
     ORDER BY trade_date ASC
 """
 
@@ -50,7 +52,7 @@ else:
     col1.metric("Close Price", f"₹{latest['close_price']:.2f}")
     col2.metric("20-Day SMA", f"₹{latest['sma_20']:.2f}" if not pd.isna(latest['sma_20']) else "N/A")
     col3.metric("50-Day SMA", f"₹{latest['sma_50']:.2f}" if not pd.isna(latest['sma_50']) else "N/A")
-    col4.metric("Volume", f"{int(latest['volume']):,}")
+    col4.metric("Volume", f"{int(latest['volume']):,}" if pd.notna(latest['volume']) else "N/A")
     
     ticker_val: str = str(selected_ticker) if selected_ticker else ""
     st.plotly_chart(plot_candlestick(df, ticker_val), use_container_width=True)
