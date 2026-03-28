@@ -2,7 +2,7 @@
 
 A production-ready data pipeline and ML layer capturing NSE stock data, analyzing PDF earnings statements, and embedding daily news for a locally-served RAG application.
 
-## 🏗 Stack Architecture
+## Stack Architecture
 
 ```mermaid
 flowchart TD
@@ -67,7 +67,7 @@ flowchart TD
     Airflow -.- Gold
 ```
 
-## 🔒 The 8 Hardened Production Rules Evaluated
+## The 8 Hardened Production Rules Evaluated
 
 1. **HF API Budget:** Hard-capped at 80 calls/day across embeddings/summaries, managed transactionally in Postgres (`hf_api_budget`).
 2. **ChromaDB Persistence:** Runs explicitly as a distinct `chromadb_data` Docker volume. Ephemeral clients strictly rejected.
@@ -78,7 +78,7 @@ flowchart TD
 7. **Model Metadata Guard:** Pipeline checks `pipeline_metadata` dimensions and model names at startup to block rogue local model dimension swaps into ChromaDB.
 8. **SQL Injection Guard:** Streamlit UI utilizes a distinct scoped `readonly_user`. Internal ML mapping queries use Regex filtering to drop `DELETE`/`DROP` statements and safely inject `LIMIT 1000`.
 
-## 🚀 Quickstart Development
+## Quickstart Development
 
 ```bash
 # 1. Spin up dependencies
