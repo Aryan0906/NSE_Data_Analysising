@@ -6,6 +6,7 @@
 # --- Data extraction ----------------------------------------
 requests>=2.31.0           # HTTP for NSE API and news
 newsapi-python>=0.2.7      # NewsAPI client (Rule 6)
+jugaad-data>=0.28          # NSE data fetcher (handles session management)
 
 # --- Data processing ----------------------------------------
 pandas>=2.2.2
