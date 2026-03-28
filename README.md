@@ -7,7 +7,7 @@ A production-ready data pipeline and ML layer capturing NSE stock data, analyzin
 ```mermaid
 flowchart TD
     %% Data Sources
-    YF[(yfinance API)]
+    NSE[(NSE India API)]
     RSS[(Yahoo RSS)]
     PDF[(Earnings PDFs)]
 
@@ -44,7 +44,7 @@ flowchart TD
     RAG[rag_query.py\nMistral-7B]
 
     %% Edges
-    YF --> Ex
+    NSE --> Ex
     RSS --> News
     PDF --> PDFEx
 

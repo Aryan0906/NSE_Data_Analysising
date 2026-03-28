@@ -1,19 +1,20 @@
 """
 backend/pipeline/nse_fetcher.py
 ================================
-Fetches real-time NSE prices using official NSE India data source.
-Faster and more accurate than yfinance.
+Fetches real-time NSE prices and fundamentals using official NSE India API.
+Primary data source for all market data (no yfinance dependency).
 
 Usage:
-    from backend.pipeline.nse_fetcher import get_nse_prices
+    from backend.pipeline.nse_fetcher import get_nse_prices, get_nse_fundamentals
     df = get_nse_prices("HDFCBANK", start_date, end_date)
+    info = get_nse_fundamentals("HDFCBANK")
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import Optional, Dict, Any
 
 import pandas as pd
 import requests
@@ -21,11 +22,33 @@ import requests
 logger = logging.getLogger(__name__)
 
 # NSE endpoints
-NSE_QUOTE_URL = "https://www.nseindia.com/api/quote-equity"
-NSE_TIMESERIES_URL = "https://www.nseindia.com/api/historical/cm/equity"
+NSE_BASE_URL = "https://www.nseindia.com"
+NSE_QUOTE_URL = f"{NSE_BASE_URL}/api/quote-equity"
+NSE_TIMESERIES_URL = f"{NSE_BASE_URL}/api/historical/cm/equity"
 NSE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer": "https://www.nseindia.com/",
 }
+
+# Session for maintaining cookies
+_session: Optional[requests.Session] = None
+
+
+def _get_session() -> requests.Session:
+    """Get or create a requests session with NSE cookies."""
+    global _session
+    if _session is None:
+        _session = requests.Session()
+        _session.headers.update(NSE_HEADERS)
+        # Visit main page to get cookies
+        try:
+            _session.get(NSE_BASE_URL, timeout=10)
+        except Exception as e:
+            logger.debug(f"Could not initialize NSE session: {e}")
+    return _session
 
 
 def get_nse_prices(
@@ -72,11 +95,11 @@ def get_nse_prices(
 def _fetch_current_quote(symbol: str) -> Optional[pd.DataFrame]:
     """Fetch current market quote from NSE (real-time price)."""
     try:
+        session = _get_session()
         params = {"symbol": symbol}
-        response = requests.get(
+        response = session.get(
             NSE_QUOTE_URL,
             params=params,
-            headers=NSE_HEADERS,
             timeout=10
         )
         response.raise_for_status()
@@ -128,6 +151,7 @@ def _fetch_historical_data(
         DataFrame with OHLCV data
     """
     try:
+        session = _get_session()
         # NSE API requires YYYY-MM-DD format
         from_date = start.strftime("%d-%b-%Y")
         to_date = end.strftime("%d-%b-%Y")
@@ -139,10 +163,9 @@ def _fetch_historical_data(
             "to": to_date,
         }
 
-        response = requests.get(
+        response = session.get(
             NSE_TIMESERIES_URL,
             params=params,
-            headers=NSE_HEADERS,
             timeout=10
         )
         response.raise_for_status()
@@ -188,4 +211,91 @@ def _parse_int(value) -> Optional[int]:
     try:
         return int(float(value))
     except (ValueError, TypeError):
+        return None
+
+
+def get_nse_fundamentals(symbol: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch fundamental data from NSE API for a given symbol.
+
+    Args:
+        symbol: Stock symbol without .NS suffix (e.g., "HDFCBANK")
+
+    Returns:
+        Dictionary with fundamental metrics or None if unavailable
+    """
+    logger.info(f"Fetching NSE fundamentals for {symbol}")
+
+    try:
+        session = _get_session()
+        params = {"symbol": symbol}
+
+        response = session.get(
+            NSE_QUOTE_URL,
+            params=params,
+            timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        if not data:
+            logger.warning(f"No data returned for {symbol}")
+            return None
+
+        # Extract fundamentals from various sections of NSE response
+        fundamentals: Dict[str, Any] = {}
+
+        # Price info section
+        price_info = data.get("priceInfo", {})
+        fundamentals["high52"] = _parse_float(price_info.get("weekHighLow", {}).get("max"))
+        fundamentals["low52"] = _parse_float(price_info.get("weekHighLow", {}).get("min"))
+        fundamentals["pChange365d"] = _parse_float(price_info.get("pChange365d"))
+        fundamentals["pChange30d"] = _parse_float(price_info.get("pChange30d"))
+
+        # Security info section
+        security_info = data.get("securityInfo", {})
+        fundamentals["faceValue"] = _parse_float(security_info.get("faceValue"))
+
+        # Metadata section (contains PE, market cap, etc.)
+        metadata = data.get("metadata", {})
+        fundamentals["industryPE"] = _parse_float(metadata.get("pdSectorInd"))
+
+        # Pre-open market section
+        preopen = data.get("preOpenMarket", {})
+        fundamentals["totalMarketCap"] = _parse_float(preopen.get("totalSellQuantity"))
+
+        # Industry info
+        industry_info = data.get("industryInfo", {})
+        fundamentals["sectorPE"] = _parse_float(industry_info.get("pe"))
+
+        # Trade info section
+        trade_info = data.get("tradeInfo", {})
+        fundamentals["deliveryToTradedQty"] = _parse_float(trade_info.get("deliveryToTradedQuantity"))
+        fundamentals["totalTradedVolume"] = _parse_int(trade_info.get("totalTradedVolume"))
+        fundamentals["totalTradedValue"] = _parse_float(trade_info.get("totalTradedValue"))
+
+        # Corporate info section (for PE, EPS, Book Value)
+        corp_info = data.get("corporateInfo", {})
+
+        # Try to get additional metrics from priceInfo
+        fundamentals["pe"] = _parse_float(price_info.get("pe"))
+        fundamentals["eps"] = _parse_float(price_info.get("eps"))
+        fundamentals["bookValue"] = _parse_float(price_info.get("bookValue"))
+        fundamentals["priceToBook"] = _parse_float(price_info.get("pbRatio"))
+
+        # Market cap from metadata
+        fundamentals["marketCap"] = _parse_float(metadata.get("marketCap"))
+
+        # Security-wide data
+        sec_wise = data.get("securityWiseDP", {})
+        fundamentals["securityWiseDP"] = _parse_float(sec_wise.get("quantityTraded"))
+
+        # Free float market cap
+        fundamentals["ffmc"] = _parse_float(metadata.get("ffmc"))
+
+        logger.info(f"✓ Got {len([v for v in fundamentals.values() if v is not None])} fundamental metrics for {symbol}")
+        return fundamentals
+
+    except Exception as e:
+        logger.warning(f"Error fetching fundamentals for {symbol}: {e}")
         return None

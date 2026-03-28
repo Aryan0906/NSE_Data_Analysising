@@ -18,7 +18,7 @@ import logging
 import signal
 import sys
 import time
-from datetime import datetime, time as time_obj
+from datetime import datetime, time as time_obj, timezone
 
 from backend.pipeline.realtime_prices import update_realtime_prices
 from backend.pipeline.settings import settings
@@ -43,10 +43,10 @@ def signal_handler(sig, frame):
 
 def is_market_hours() -> bool:
     """Check if current time is within NSE market hours (9:15 AM - 3:30 PM IST)."""
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
-    # Get current UTC time
-    utc_now = datetime.utcnow()
+    # Get current UTC time (timezone-aware)
+    utc_now = datetime.now(timezone.utc)
 
     # Convert UTC to IST (UTC + 5:30)
     ist_now = utc_now + timedelta(hours=5, minutes=30)

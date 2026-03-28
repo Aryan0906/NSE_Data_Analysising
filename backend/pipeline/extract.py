@@ -2,17 +2,17 @@
 backend/pipeline/extract.py
 ============================
 Task 2 of the Airflow DAG — pulls NSE price history and key fundamentals
-from Yahoo Finance (yfinance) and inserts them into the **bronze** layer.
+from the official NSE India API and inserts them into the **bronze** layer.
 
 Rules enforced:
-  Rule 3 : yfinance exclusively for market data (no paid data sources).
+  Rule 3 : NSE API exclusively for market data (official source).
   Rule 5 : This task runs AFTER db_init and BEFORE transform.
   Rule 8 : Writes as nse_admin; nse_reader gets SELECT via db_init grants.
 
 Design:
   - All writes are UPSERT (ON CONFLICT DO NOTHING) → idempotent on re-run.
   - Fundamentals are stored as EAV rows (metric_name / metric_value) so new
-    yfinance fields need no schema change.
+    fields need no schema change.
   - A pipeline_runs audit row is written for lineage (Rule 5 design).
 """
 
@@ -27,11 +27,10 @@ from typing import Generator, Optional
 
 import psycopg2
 import psycopg2.extras
-import yfinance as yf
 import pandas as pd
 
 from backend.pipeline.settings import settings
-from backend.pipeline.nse_fetcher import get_nse_prices
+from backend.pipeline.nse_fetcher import get_nse_prices, get_nse_fundamentals
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -40,38 +39,24 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 
-# ── Fundamental metrics we persist from yf.Ticker.info ────────────────────
+# ── Fundamental metrics we persist from NSE API ────────────────────
 FUNDAMENTAL_FIELDS: list[str] = [
     "marketCap",
-    "trailingPE",
-    "forwardPE",
+    "pe",
+    "sectorPE",
+    "industryPE",
+    "bookValue",
     "priceToBook",
-    "debtToEquity",
-    "returnOnEquity",
-    "returnOnAssets",
-    "trailingEps",
-    "forwardEps",
-    "dividendYield",
-    "payoutRatio",
-    "revenueGrowth",
-    "earningsGrowth",
-    "currentRatio",
-    "quickRatio",
-    "freeCashflow",
-    "operatingCashflow",
-    "grossMargins",
-    "operatingMargins",
-    "profitMargins",
-    "totalRevenue",
-    "netIncomeToCommon",
-    "totalDebt",
-    "totalCash",
-    "enterpriseValue",
-    "beta",
-    "52WeekChange",
-    "fiftyTwoWeekHigh",
-    "fiftyTwoWeekLow",
-    "averageVolume",
+    "faceValue",
+    "eps",
+    "deliveryToTradedQty",
+    "securityWiseDP",
+    "totalMarketCap",
+    "ffmc",
+    "high52",
+    "low52",
+    "pChange365d",
+    "pChange30d",
 ]
 
 
@@ -153,8 +138,7 @@ def extract_prices(
     Download OHLCV data for *symbols* between *start* and *end* and insert
     into bronze.raw_prices.  Returns total rows written.
 
-    Tries NSE API first (real-time, accurate), falls back to yfinance.
-    Always fetches today's real-time price from NSE API.
+    Uses NSE India API exclusively for accurate, real-time data.
     """
     run_date = run_date or date.today()
     total_written = 0
@@ -162,55 +146,45 @@ def extract_prices(
     for symbol in symbols:
         # Remove .NS suffix if present for NSE API
         symbol_clean = symbol.replace(".NS", "")
-        nse_symbol = symbol if symbol.endswith(".NS") else f"{symbol}.NS"
         logger.info("Extracting prices for %s [%s → %s]", symbol_clean, start, end)
 
         df = None
 
-        # Try NSE API first (real-time, most accurate)
-        # Fetch today's price separately for real-time data
+        # Fetch from NSE API (official source)
         try:
+            # Fetch today's real-time price
             logger.info("Fetching TODAY's real-time price from NSE API for %s", symbol_clean)
             today_df = get_nse_prices(symbol_clean, date.today(), date.today())
+
             if today_df is not None and not today_df.empty:
                 logger.info("✓ NSE API today's price for %s: ₹%.2f", symbol_clean, today_df.iloc[0]['Close'])
 
-                # Then get historical data
-                logger.info("Fetching historical prices from NSE API for %s", symbol_clean)
-                hist_df = get_nse_prices(symbol_clean, start, end.replace(day=end.day-1))  # Exclude today from hist
+                # Then get historical data (if date range extends beyond today)
+                if start < date.today():
+                    logger.info("Fetching historical prices from NSE API for %s", symbol_clean)
+                    hist_end = end - timedelta(days=1) if end >= date.today() else end
+                    hist_df = get_nse_prices(symbol_clean, start, hist_end)
 
-                if hist_df is not None and not hist_df.empty:
-                    df = pd.concat([hist_df, today_df], ignore_index=True)
-                    logger.info("✓ NSE API success: %d records for %s", len(df), symbol_clean)
+                    if hist_df is not None and not hist_df.empty:
+                        df = pd.concat([hist_df, today_df], ignore_index=True)
+                        logger.info("✓ NSE API success: %d records for %s", len(df), symbol_clean)
+                    else:
+                        df = today_df
+                        logger.info("✓ NSE API (today only): %d records for %s", len(df), symbol_clean)
                 else:
                     df = today_df
-                    logger.info("✓ NSE API (today only): %d records for %s", len(df), symbol_clean)
             else:
-                logger.warning("NSE API returned no data, falling back to yfinance")
-                df = None
-        except Exception as exc:
-            logger.warning("NSE API error for %s, falling back to yfinance: %s", symbol_clean, exc)
-            df = None
-
-        # Fallback to yfinance if NSE API fails
-        if df is None or df.empty:
-            try:
-                logger.info("Fetching from yfinance for %s", nse_symbol)
-                ticker = yf.Ticker(nse_symbol)
-                df = ticker.history(
-                    start=start.isoformat(),
-                    end=end.isoformat(),
-                    auto_adjust=False,
-                    actions=False,
-                )
-                if df.empty:
-                    logger.warning("No price data returned (yfinance) for %s", nse_symbol)
-                    continue
-            except Exception as exc:
-                logger.warning("yfinance error for %s: %s", nse_symbol, exc)
+                logger.warning("NSE API returned no data for %s", symbol_clean)
                 continue
+        except Exception as exc:
+            logger.error("NSE API error for %s: %s", symbol_clean, exc)
+            continue
 
-        df = df.reset_index()
+        if df is None or df.empty:
+            logger.warning("No price data for %s", symbol_clean)
+            continue
+
+        df = df.reset_index(drop=True)
         rows = [
             (
                 symbol_clean,                            # store original symbol (without .NS)
@@ -265,21 +239,23 @@ def extract_fundamentals(
     run_date: Optional[date] = None,
 ) -> int:
     """
-    Fetch key fundamental metrics from yf.Ticker.info for each symbol and
-    insert into bronze.raw_fundamentals.  report_period = today's date as
-    a proxy (yfinance doesn't expose precise report quarters via .info).
+    Fetch key fundamental metrics from NSE API for each symbol and
+    insert into bronze.raw_fundamentals.  report_period = today's date.
     """
     run_date = run_date or date.today()
     total_written = 0
 
     for symbol in symbols:
-        nse_symbol = symbol if symbol.endswith(".NS") else f"{symbol}.NS"
-        logger.info("Extracting fundamentals for %s", nse_symbol)
+        symbol_clean = symbol.replace(".NS", "")
+        logger.info("Extracting fundamentals for %s", symbol_clean)
 
         try:
-            info = yf.Ticker(nse_symbol).info
+            info = get_nse_fundamentals(symbol_clean)
+            if info is None:
+                logger.warning("No fundamental data returned for %s", symbol_clean)
+                continue
         except Exception as exc:
-            logger.warning("yfinance fundamentals error for %s: %s", nse_symbol, exc)
+            logger.warning("NSE fundamentals error for %s: %s", symbol_clean, exc)
             continue
 
         rows = []
@@ -291,10 +267,10 @@ def extract_fundamentals(
                 metric_value = float(raw_val)
             except (TypeError, ValueError):
                 continue
-            rows.append((symbol, run_date, field, metric_value, None))
+            rows.append((symbol_clean, run_date, field, metric_value, None))
 
         if not rows:
-            logger.warning("No fundamental data for %s", symbol)
+            logger.warning("No fundamental data for %s", symbol_clean)
             continue
 
         with _get_conn() as conn:
@@ -311,7 +287,7 @@ def extract_fundamentals(
                 records_written=len(rows),
             )
 
-        logger.info("Upserted %d fundamental rows for %s", len(rows), symbol)
+        logger.info("Upserted %d fundamental rows for %s", len(rows), symbol_clean)
 
     logger.info("Fundamentals extraction complete — %d rows total", total_written)
     return total_written

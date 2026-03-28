@@ -88,7 +88,7 @@ DDL_STATEMENTS = [
         close_price     NUMERIC(14,4),
         adj_close_price NUMERIC(14,4),
         volume          BIGINT,
-        source          VARCHAR(50)   NOT NULL DEFAULT 'yfinance',
+        source          VARCHAR(50)   NOT NULL DEFAULT 'nse',
         ingested_at     TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
         CONSTRAINT uq_bronze_prices UNIQUE (symbol, trade_date, source)
     );
@@ -102,7 +102,7 @@ DDL_STATEMENTS = [
         metric_name     VARCHAR(100)  NOT NULL,
         metric_value    NUMERIC(20,4),
         unit            VARCHAR(20),
-        source          VARCHAR(50)   NOT NULL DEFAULT 'yfinance',
+        source          VARCHAR(50)   NOT NULL DEFAULT 'nse',
         ingested_at     TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
         CONSTRAINT uq_bronze_fundamentals UNIQUE (symbol, report_period, metric_name, source)
     );

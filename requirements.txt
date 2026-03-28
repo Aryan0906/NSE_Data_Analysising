@@ -4,60 +4,57 @@
 # =============================================================
 
 # --- Data extraction ----------------------------------------
-yfinance==0.2.40           # NSE tick & fundamental data
-nsepython==2.97            # Official NSE India API (real-time prices)
-requests==2.31.0           # HTTP for news API
-newsapi-python==0.2.7      # NewsAPI client (Rule 6)
+requests>=2.31.0           # HTTP for NSE API and news
+newsapi-python>=0.2.7      # NewsAPI client (Rule 6)
 
 # --- Data processing ----------------------------------------
-pandas==2.2.2
-numpy==1.26.4
-pyarrow==16.1.0            # Parquet / Arrow serialisation
+pandas>=2.2.2
+numpy>=1.26.4
+pyarrow>=16.1.0            # Parquet / Arrow serialisation
 
 # --- Validation / contracts ---------------------------------
-pydantic==2.7.1            # Sprint 2 schema contracts
-pydantic-settings==2.3.1   # env-var injection
+pydantic>=2.7.1            # Sprint 2 schema contracts
+pydantic-settings>=2.3.1   # env-var injection
 
 # --- Database -----------------------------------------------
-psycopg2-binary==2.9.9     # Postgres driver
-SQLAlchemy>=1.4.36,<2.0.0         # ORM + Core (Sprint 2 load.py)
+psycopg2-binary>=2.9.9     # Postgres driver
+SQLAlchemy>=2.0.0          # ORM + Core (Sprint 2 load.py)
 
 # --- ChromaDB (Rule 2) -------------------------------------
-chromadb==0.5.5            # Must match docker image tag
+chromadb>=0.5.5            # Must match docker image tag
 
 # --- Embeddings / LLM (Rules 1, 7) -------------------------
-huggingface-hub==0.23.4    # HF inference API (Rule 1 budget)
-transformers==4.41.2       # BART summariser (Sprint 5)
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.3.1+cpu
+huggingface-hub>=0.23.4    # HF inference API (Rule 1 budget)
+transformers>=4.41.2       # BART summariser (Sprint 5)
+torch>=2.3.1
 
-sentencepiece==0.2.0       # tokeniser support
-sentence-transformers==3.0.1  # all-MiniLM-L6-v2 (Rule 7)
+sentencepiece>=0.2.0       # tokeniser support
+sentence-transformers>=3.0.1  # all-MiniLM-L6-v2 (Rule 7)
 
 # --- PDF extraction (Rule 3) --------------------------------
-pypdf==4.2.0
-pdf2image==1.17.0
-feedparser==6.0.11
-pytesseract==0.3.10        # OCR fallback (Rule 3)
-Pillow==10.3.0             # image support for OCR
+pypdf>=4.2.0
+pdf2image>=1.17.0
+feedparser>=6.0.11
+pytesseract>=0.3.10        # OCR fallback (Rule 3)
+Pillow>=10.3.0             # image support for OCR
 
 # --- Airflow extras -----------------------------------------
-apache-airflow==2.8.4
-apache-airflow-providers-postgres==5.10.2
+apache-airflow>=2.8.4
+apache-airflow-providers-postgres>=5.10.2
 
 # --- Frontend -----------------------------------------------
-streamlit==1.35.0
-plotly==5.22.0
-altair==5.3.0
+streamlit>=1.35.0
+plotly>=5.22.0
+altair>=5.3.0
 
 # --- Testing / CI -------------------------------------------
-pytest==8.2.2
-pytest-cov==5.0.0
-pytest-mock==3.14.0
-responses==0.25.3          # mock HTTP in tests
+pytest>=8.2.2
+pytest-cov>=5.0.0
+pytest-mock>=3.14.0
+responses>=0.25.3          # mock HTTP in tests
 
 # --- Utilities ----------------------------------------------
-python-dotenv==1.0.1       # .env loader
-tenacity==8.4.1            # retry logic (Rules 1, 6)
-loguru==0.7.2              # structured logging
-tqdm==4.66.4               # progress bars
+python-dotenv>=1.0.1       # .env loader
+tenacity>=8.4.1            # retry logic (Rules 1, 6)
+loguru>=0.7.2              # structured logging
+tqdm>=4.66.4               # progress bars

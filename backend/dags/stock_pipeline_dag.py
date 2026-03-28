@@ -248,7 +248,7 @@ Must complete before any data-touching task starts.
         op_kwargs=_symbols_kwargs,
         doc_md="""\
 **extract_prices** — Pulls OHLCV history and key fundamentals from
-Yahoo Finance (`yfinance`) for every symbol in `NSE_SYMBOLS`.
+official NSE India API for every symbol in `NSE_SYMBOLS`.
 Writes to `bronze.raw_prices` and `bronze.raw_fundamentals` (UPSERT).
 """,
     )

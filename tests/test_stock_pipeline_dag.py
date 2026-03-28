@@ -25,7 +25,7 @@ import importlib.util
 import pathlib
 import sys
 import types
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 
@@ -213,7 +213,7 @@ _python_op.PythonOperator = _Task  # type: ignore[attr-defined]
 sys.modules.setdefault("airflow.operators.python", _python_op)
 
 _utils_dates = _make_mod("airflow.utils.dates")
-_utils_dates.days_ago = lambda n: datetime.utcnow() - timedelta(days=n)  # type: ignore[attr-defined]
+_utils_dates.days_ago = lambda n: datetime.now(timezone.utc) - timedelta(days=n)  # type: ignore[attr-defined]
 sys.modules.setdefault("airflow.utils.dates", _utils_dates)
 
 _utils = _make_mod("airflow.utils")
