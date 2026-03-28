@@ -124,8 +124,7 @@ def _budget_check() -> None:
 
 def _get_client() -> InferenceClient:
     return InferenceClient(
-        provider="hf-inference",
-        api_key=settings.hf_api_token,
+        token=settings.hf_api_token,
     )
 
 def _execute_with_retry(func, *args, **kwargs):

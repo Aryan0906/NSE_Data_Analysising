@@ -43,16 +43,21 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
+import sys
 from datetime import datetime, timedelta
 from typing import Optional
 
-from airflow import DAG
-from airflow.operators.python import PythonOperator
+# Ensure /opt/airflow is in sys.path for Docker container DAG parsing
+if "/opt/airflow" not in sys.path:
+    sys.path.insert(0, "/opt/airflow")
+
+from airflow import DAG  # type: ignore[import-not-found]
+from airflow.operators.python import PythonOperator  # type: ignore[import-not-found]
 
 # Pipeline modules — must be importable inside the Airflow worker container.
 # The docker-compose mounts ./backend → /opt/airflow/backend so the import
 # path is backend.pipeline.*
-from backend.pipeline import db_init, extract, news_ingest, load
+from backend.pipeline import db_init, extract, news_ingest, earnings_ingest, load
 from backend.pipeline import transform
 from backend.pipeline.transform import (
     transform_prices,
@@ -100,7 +105,7 @@ def _task_db_init(**_: object) -> None:
     db_init.run()
 
 
-def _task_extract_prices(symbols: list[str], **_: object) -> int:
+def _task_extract_prices(symbols: list[str], **_: object) -> dict[str, int]:
     """Task 2 — Pull OHLCV + fundamentals from Yahoo Finance → bronze layer."""
     return extract.run(symbols=symbols)
 
@@ -110,7 +115,17 @@ def _task_news_ingest(symbols: list[str], **_: object) -> int:
     return news_ingest.run(symbols=symbols)
 
 
-def _task_transform_prices(symbols: list[str], **_: object) -> dict[str, int]:
+def _task_earnings_ingest(symbols: list[str], **_: object) -> int:
+    """Task 3b — Analyze NSE fundamentals and generate earnings summaries.
+
+    Fetches fundamentals from bronze.raw_fundamentals, generates narrative,
+    analyzes with BART + FinBERT, and stores in public.earnings_summaries.
+    Runs in parallel with news ingestion after extract_prices completes.
+    """
+    return earnings_ingest.run(symbols=symbols)
+
+
+def _task_transform_prices(symbols: list[str], **_: object) -> int:
     """Task 4 — Clean prices/fundamentals, compute indicators → silver layer.
 
     Calls the module-level transform_prices() + transform_fundamentals() for
@@ -123,7 +138,7 @@ def _task_transform_prices(symbols: list[str], **_: object) -> dict[str, int]:
         totals["prices"] += transform_prices(sym, run_date)
         totals["fundamentals"] += transform_fundamentals(sym)
     logger.info("transform_prices complete: %s", totals)
-    return totals
+    return totals["prices"] + totals["fundamentals"]
 
 
 def _task_transform_news(symbols: list[str], **_: object) -> int:
@@ -139,7 +154,7 @@ def _task_transform_news(symbols: list[str], **_: object) -> int:
     return total
 
 
-def _task_load_gold(symbols: list[str], **_: object) -> int:
+def _task_load_gold(symbols: list[str], **_: object) -> dict[str, int]:
     """Task 6 — Materialise gold.stock_summary, gold.news_feed, upsert ChromaDB."""
     return load.run(symbols=symbols)
 
@@ -214,11 +229,11 @@ def _task_validate_schema(**_: object) -> None:
 with DAG(
     dag_id="stock_pipeline",
     description=(
-        "NSE daily ETL — 8 tasks: db_init → [extract_prices ‖ news_ingest] → "
-        "[transform_prices ‖ transform_news] → load_gold → create_views → validate_schema"
+        "NSE daily ETL — 9 tasks: db_init → [extract_prices ‖ news_ingest] → "
+        "[transform_prices ‖ earnings_ingest ‖ transform_news] → load_gold → create_views → validate_schema"
     ),
     default_args=DEFAULT_ARGS,
-    schedule="30 13 * * 1-5",   # 18:30 IST = 13:00 UTC, weekdays only
+    schedule="0 * * * *",   # Every hour, 24/7
     start_date=datetime(2025, 1, 1),
     catchup=False,
     max_active_runs=1,
@@ -263,6 +278,19 @@ Writes to `bronze.raw_prices` and `bronze.raw_fundamentals` (UPSERT).
 **news_ingest** — Fetches stock-market headlines from NewsAPI.
 Deduplicates on SHA-256 content hash (Rule 6) and writes to
 `bronze.raw_news`.  Exits cleanly if `NEWS_API_KEY` is absent.
+""",
+    )
+
+    # ── Task 3b: Earnings analysis (parallel with Task 2, feeds transform phase) ─
+
+    t3b_earnings_ingest = PythonOperator(
+        task_id="earnings_ingest",
+        python_callable=_task_earnings_ingest,
+        op_kwargs=_symbols_kwargs,
+        doc_md="""\
+**earnings_ingest** — Analyzes NSE fundamentals (EPS, P/E, market cap, etc).
+Generates narrative, summarizes with BART, scores sentiment with FinBERT.
+Stores results in `public.earnings_summaries` for dashboard display.
 """,
     )
 
@@ -336,20 +364,22 @@ NOTICE/WARNING messages as Airflow log entries.
     # ─────────────────────────────────────────────────────────────────────────
     #
     # Phase A — init:          db_init
-    # Phase B — ingest:        extract_prices   news_ingest        (parallel)
-    # Phase C — transform:     transform_prices transform_news     (parallel)
+    # Phase B — ingest:        extract_prices   [news_ingest, earnings_ingest]  (parallel)
+    # Phase C — transform:     [transform_prices, earnings_ingest, transform_news] (parallel)
     # Phase D — consolidate:   load_gold
-    # Phase E — finalise:      create_views → validate_schema      (serial)
+    # Phase E — finalise:      create_views → validate_schema                   (serial)
     #
     # Fan-out after db_init:
-    t1_db_init >> [t2_extract_prices, t3_news_ingest]
+    _ = t1_db_init >> [t2_extract_prices, t3_news_ingest]
 
-    # extract_prices feeds only its transform; news_ingest feeds only its transform:
-    t2_extract_prices >> t4_transform_prices
-    t3_news_ingest    >> t5_transform_news
+    # extract_prices feeds both transform_prices AND earnings_ingest:
+    _ = t2_extract_prices >> [t4_transform_prices, t3b_earnings_ingest]
 
-    # Fan-in: load_gold waits for BOTH transforms to finish:
-    [t4_transform_prices, t5_transform_news] >> t6_load_gold
+    # news_ingest feeds only transform_news:
+    _ = t3_news_ingest >> t5_transform_news
+
+    # Fan-in: load_gold waits for BOTH transforms AND earnings_ingest to finish:
+    _ = [t4_transform_prices, t5_transform_news, t3b_earnings_ingest] >> t6_load_gold
 
     # Serial finalisation:
-    t6_load_gold >> t7_create_views >> t8_validate_schema
+    _ = t6_load_gold >> t7_create_views >> t8_validate_schema

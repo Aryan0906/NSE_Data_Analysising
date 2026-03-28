@@ -143,6 +143,40 @@ services:
       postgres:
         condition: service_healthy
 
+  # ----------------------------------------------------------
+  # Streamlit Frontend — UI on port 8501
+  # ----------------------------------------------------------
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    container_name: nse_streamlit
+    command: streamlit run frontend/app.py --server.port=8501 --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    env_file: .env
+    environment:
+      PYTHONPATH: /opt/airflow
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_READONLY_USER: ${POSTGRES_READONLY_USER}
+      POSTGRES_READONLY_PASSWORD: ${POSTGRES_READONLY_PASSWORD}
+      CHROMADB_HOST: chromadb
+      CHROMADB_PORT: 8000
+      HF_API_TOKEN: ${HF_API_TOKEN}
+    volumes:
+      - ./frontend:/opt/airflow/frontend
+      - ./backend:/opt/airflow/backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+
 # ============================================================
 # Named volumes — data outlives container restarts
 # Rule 2 enforced: chromadb_data is a persistent Docker volume

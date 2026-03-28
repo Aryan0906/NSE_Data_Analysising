@@ -342,6 +342,22 @@ DDL_STATEMENTS = [
         finished_at     TIMESTAMPTZ
     );
     """,
+
+    # ═══════════════════════════════════════════════════════
+    # Earnings summaries (BART-generated from PDFs)
+    # ═══════════════════════════════════════════════════════
+    """
+    CREATE TABLE IF NOT EXISTS public.earnings_summaries (
+        id              BIGSERIAL PRIMARY KEY,
+        ticker          VARCHAR(20)   NOT NULL,
+        report_date     DATE,
+        source_file     VARCHAR(255)  NOT NULL,
+        summary         TEXT,
+        created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+        CONSTRAINT uq_earnings_summaries UNIQUE (ticker, report_date)
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_earnings_summaries_ticker ON public.earnings_summaries (ticker, report_date DESC);",
 ]
 
 # ─────────────────────────────────────────────────

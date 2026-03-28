@@ -29,15 +29,18 @@ def fetch_data(query: str, params: Optional[dict] = None) -> pd.DataFrame:
     Enforces Rule 8 by passing the query through `guard_sql`.
     """
     engine = get_readonly_engine()
-    
+
     # Rule 8: SQL Injection Guard
     safe_query = guard_sql(query)
-    
-    with engine.connect() as conn:
-        result = conn.execute(text(safe_query), params or {})
-        df = pd.DataFrame(result.fetchall(), columns=result.keys())
-            
-    return df
+
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(safe_query), params or {})
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        return df
+    except Exception as e:
+        st.error(f"Database query failed: {e}")
+        return pd.DataFrame()
 
 def get_tickers():
     """Get active tickers from stock_summary."""
